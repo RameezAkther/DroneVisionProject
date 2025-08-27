@@ -7,8 +7,8 @@ train_dataloader:
   type: DataLoader
   dataset:
     type: CocoDetection
-    img_folder: ./dataset/seadronessee-dataset/images/train/
-    ann_file: ./dataset/seadronessee-dataset/annotations/instances_train_objects_in_water.json
+    img_folder: /kaggle/input/seadronessee-mot-sampled-dataset/dataset/seadronessee-dataset/images/train
+    ann_file: /kaggle/input/seadronessee-mot-sampled-dataset/dataset/seadronessee-dataset/annotations/instances_train_objects_in_water.json
     transforms:
       type: Compose
       ops: ~
@@ -21,8 +21,8 @@ val_dataloader:
   type: DataLoader
   dataset:
     type: CocoDetection
-    img_folder: ./dataset/seadronessee-dataset/images/val/
-    ann_file: ./dataset/seadronessee-dataset/annotations/instances_val_objects_in_water.json
+    img_folder: /kaggle/input/seadronessee-mot-sampled-dataset/dataset/seadronessee-dataset/images/val
+    ann_file: /kaggle/input/seadronessee-mot-sampled-dataset/dataset/seadronessee-dataset/annotations/instances_val_objects_in_water.json
     transforms:
       type: Compose
       ops: ~
@@ -31,3 +31,4 @@ val_dataloader:
   batch_size: 8
   num_workers: 4
   drop_last: False
+
