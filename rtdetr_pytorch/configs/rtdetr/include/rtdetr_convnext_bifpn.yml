@@ -1,0 +1,54 @@
+task: detection
+
+model: RTDETR
+criterion: SetCriterion
+postprocessor: RTDETRPostProcessor
+
+RTDETR:
+  backbone: ConvNeXtBackbone
+  encoder: BiFPN_FSG
+  decoder: RTDETRTransformer
+  multi_scale: [480, 512, 544, 576, 608, 640, 672, 704, 736, 768, 800]
+
+ConvNeXtBackbone:
+  variant: convnext_tiny.fb_in22k_in1k # or "convnext_base.fb_in22k_in1k"
+  pretrained: True
+  freeze_at: -1
+  freeze_norm: True
+  out_channels: 256
+  return_idx: [0, 1, 2, 3]
+
+BiFPN_FSG:
+  in_channels: 256
+  num_layers: 2 # try stacking 2-3 BiFPN layers
+  use_fsg: True # enables Feature Selection Gate
+
+RTDETRTransformer:
+  feat_channels: [256, 256, 256, 256] # 4 levels now (P2–P5)
+  feat_strides: [4, 8, 16, 32]
+  hidden_dim: 256
+  num_levels: 4
+
+  num_queries: 300
+  num_decoder_layers: 6
+  num_denoising: 100
+
+  eval_idx: -1
+  eval_spatial_size: [640, 640]
+
+use_focal_loss: True
+
+RTDETRPostProcessor:
+  num_top_queries: 300
+
+SetCriterion:
+  weight_dict: { loss_vfl: 1, loss_bbox: 5, loss_giou: 2 }
+  losses: ["vfl", "boxes"]
+  alpha: 0.75
+  gamma: 2.0
+
+  matcher:
+    type: HungarianMatcher
+    weight_dict: { cost_class: 2, cost_bbox: 5, cost_giou: 2 }
+    alpha: 0.25
+    gamma: 2.0
