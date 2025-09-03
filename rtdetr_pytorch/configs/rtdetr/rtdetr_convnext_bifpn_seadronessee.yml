@@ -1,0 +1,10 @@
+__include__:
+  [
+    "../dataset/seadronessee_detection.yml",
+    "../runtime.yml",
+    "./include/dataloader.yml",
+    "./include/optimizer.yml",
+    "./include/rtdetr_convnext_bifpn.yml",
+  ]
+
+output_dir: ./output/rtdetr_convnext_bifpn_seadronessee
