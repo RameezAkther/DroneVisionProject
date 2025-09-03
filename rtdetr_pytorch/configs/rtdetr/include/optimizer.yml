@@ -6,7 +6,7 @@ ema:
 
 find_unused_parameters: True
 
-epoches: 29
+epoches: 34
 clip_max_norm: 0.1
 
 optimizer:
@@ -27,10 +27,3 @@ lr_scheduler:
   type: MultiStepLR
   milestones: [1000]
   gamma: 0.1
-
-
-
-
-
-
-
