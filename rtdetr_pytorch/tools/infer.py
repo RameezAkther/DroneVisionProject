@@ -12,6 +12,7 @@ import src.misc.dist as dist
 from src.core import YAMLConfig 
 from src.solver import TASKS
 import numpy as np
+import cv2
 
 def postprocess(labels, boxes, scores, iou_threshold=0.55):
     def calculate_iou(box1, box2):
@@ -112,6 +113,38 @@ def draw(images, labels, boxes, scores, thrh = 0.6, path = ""):
             im.save(f'results_{i}.jpg')
         else:
             im.save(path)
+def run_on_video(args, model, transforms):
+    cap = cv2.VideoCapture(args.video_file)
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter("output_video.mp4", fourcc, cap.get(cv2.CAP_PROP_FPS),
+                          (int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+                           int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))))
+
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        # Convert to PIL for your existing pipeline
+        im_pil = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+        w, h = im_pil.size
+        orig_size = torch.tensor([w, h])[None].to(args.device)
+
+        im_data = transforms(im_pil)[None].to(args.device)
+
+        with torch.no_grad(), autocast():
+            labels, boxes, scores = model(im_data, orig_size)
+
+        # Draw boxes
+        draw([im_pil], labels, boxes, scores, 0.6, path="tmp.jpg")
+
+        # Reload with OpenCV to overlay onto video
+        result_frame = cv2.imread("tmp.jpg")
+        out.write(result_frame)
+
+    cap.release()
+    out.release()
+    print("✅ Saved video as output_video.mp4")
             
 def main(args, ):
     """main
@@ -125,7 +158,8 @@ def main(args, ):
             state = checkpoint['model']
     else:
         raise AttributeError('Only support resume to load model.state_dict by now.')
-    # NOTE load train mode state -> convert to deploy mode
+
+    # load model
     cfg.model.load_state_dict(state)
     class Model(nn.Module):
         def __init__(self, ) -> None:
@@ -139,45 +173,82 @@ def main(args, ):
             return outputs
     
     model = Model().to(args.device)
-    im_pil = Image.open(args.im_file).convert('RGB')
-    w, h = im_pil.size
-    orig_size = torch.tensor([w, h])[None].to(args.device)
-    
+
     transforms = T.Compose([
         T.Resize((640, 640)),  
         T.ToTensor(),
     ])
-    im_data = transforms(im_pil)[None].to(args.device)
-    if args.sliced:
-        num_boxes = args.numberofboxes
-        
-        aspect_ratio = w / h
-        num_cols = int(np.sqrt(num_boxes * aspect_ratio)) 
-        num_rows = int(num_boxes / num_cols)
-        slice_height = h // num_rows
-        slice_width = w // num_cols
-        overlap_ratio = 0.2
-        slices, coordinates = slice_image(im_pil, slice_height, slice_width, overlap_ratio)
-        predictions = []
-        for i, slice_img in enumerate(slices):
-            slice_tensor = transforms(slice_img)[None].to(args.device)
-            with autocast():  # Use AMP for each slice
-                output = model(slice_tensor, torch.tensor([[slice_img.size[0], slice_img.size[1]]]).to(args.device))
-            torch.cuda.empty_cache() 
+
+    # ✅ VIDEO INFERENCE
+    if args.video_file:
+        import cv2
+        cap = cv2.VideoCapture(args.video_file)
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        out = cv2.VideoWriter("output_video.mp4", fourcc, cap.get(cv2.CAP_PROP_FPS),
+                              (int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+                               int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))))
+
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            # Convert to PIL for compatibility with your transforms/draw()
+            im_pil = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            w, h = im_pil.size
+            orig_size = torch.tensor([w, h])[None].to(args.device)
+            im_data = transforms(im_pil)[None].to(args.device)
+
+            with torch.no_grad(), autocast():
+                labels, boxes, scores = model(im_data, orig_size)
+
+            # Draw with your existing PIL-based function
+            draw([im_pil], labels, boxes, scores, 0.6, path="tmp.jpg")
+            result_frame = cv2.imread("tmp.jpg")
+            out.write(result_frame)
+
+        cap.release()
+        out.release()
+        print("✅ Saved video as output_video.mp4")
+
+    # ✅ IMAGE INFERENCE
+    else:
+        im_pil = Image.open(args.im_file).convert('RGB')
+        w, h = im_pil.size
+        orig_size = torch.tensor([w, h])[None].to(args.device)
+        im_data = transforms(im_pil)[None].to(args.device)
+
+        if args.sliced:
+            num_boxes = args.numberofboxes
+            aspect_ratio = w / h
+            num_cols = int(np.sqrt(num_boxes * aspect_ratio)) 
+            num_rows = int(num_boxes / num_cols)
+            slice_height = h // num_rows
+            slice_width = w // num_cols
+            overlap_ratio = 0.2
+            slices, coordinates = slice_image(im_pil, slice_height, slice_width, overlap_ratio)
+            predictions = []
+            for i, slice_img in enumerate(slices):
+                slice_tensor = transforms(slice_img)[None].to(args.device)
+                with autocast():  # Use AMP for each slice
+                    output = model(slice_tensor, torch.tensor([[slice_img.size[0], slice_img.size[1]]]).to(args.device))
+                torch.cuda.empty_cache() 
+                labels, boxes, scores = output
+                
+                labels = labels.cpu().detach().numpy()
+                boxes = boxes.cpu().detach().numpy()
+                scores = scores.cpu().detach().numpy()
+                predictions.append((labels, boxes, scores))
+            
+            merged_labels, merged_boxes, merged_scores = merge_predictions(
+                predictions, coordinates, (h, w), slice_width, slice_height
+            )
+            labels, boxes, scores = postprocess(merged_labels, merged_boxes, merged_scores)
+        else:
+            output = model(im_data, orig_size)
             labels, boxes, scores = output
             
-            labels = labels.cpu().detach().numpy()
-            boxes = boxes.cpu().detach().numpy()
-            scores = scores.cpu().detach().numpy()
-            predictions.append((labels, boxes, scores))
-        
-        merged_labels, merged_boxes, merged_scores = merge_predictions(predictions, coordinates, (h, w), slice_width, slice_height)
-        labels, boxes, scores = postprocess(merged_labels, merged_boxes, merged_scores)
-    else:
-        output = model(im_data, orig_size)
-        labels, boxes, scores = output
-        
-    draw([im_pil], labels, boxes, scores, 0.6)
+        draw([im_pil], labels, boxes, scores, 0.6)
   
 if __name__ == '__main__':
     import argparse
@@ -188,16 +259,6 @@ if __name__ == '__main__':
     parser.add_argument('-s', '--sliced', type=bool, default=False)
     parser.add_argument('-d', '--device', type=str, default='cpu')
     parser.add_argument('-nc', '--numberofboxes', type=int, default=25)
+    parser.add_argument('--video-file', type=str, default=None)
     args = parser.parse_args()
     main(args)
-
-
-
-
-
-
-
-
-
-
-
