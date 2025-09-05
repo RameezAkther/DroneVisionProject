@@ -1,6 +1,6 @@
 task: detection
 
-num_classes: 3
+num_classes: 5
 remap_mscoco_category: False
 
 train_dataloader:
@@ -31,6 +31,7 @@ val_dataloader:
   batch_size: 8
   num_workers: 4
   drop_last: False
+
 
 
 
