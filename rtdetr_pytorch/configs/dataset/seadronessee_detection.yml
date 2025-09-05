@@ -21,7 +21,7 @@ val_dataloader:
   type: DataLoader
   dataset:
     type: CocoDetection
-    img_folder: /kaggle/input/mobdrone-dataset-coco-format/mobdrone/images/val
+    img_folder: /kaggle/input/mobdrone-dataset-coco-format/mobdrone/images/valid
     ann_file: /kaggle/input/mobdrone-dataset-coco-format/mobdrone/annotations/val.json
     transforms:
       type: Compose
@@ -31,5 +31,6 @@ val_dataloader:
   batch_size: 8
   num_workers: 4
   drop_last: False
+
 
 
