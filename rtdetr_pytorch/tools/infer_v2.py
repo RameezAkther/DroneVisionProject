@@ -11,16 +11,30 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 from src.core import YAMLConfig
 
-# ✅ Assign unique colors for each class
-def get_color_map(num_classes=80, seed=42):
-    random.seed(seed)
-    colors = []
-    for _ in range(num_classes):
-        colors.append((random.randint(0, 255), random.randint(0, 255), random.randint(0, 255)))
-    return colors
+# ✅ Assign specific colors for the 3 classes
+def get_color_map():
+    # 3 classes only: 0 → swimmer, 1 → swimmer with life jacket, 2 → boat
+    return {
+        0: (0, 255, 0),    # swimmer → green
+        1: (255, 0, 0),    # swimmer with life jacket → red
+        2: (0, 0, 255),    # boat → blue
+    }
 
+# ✅ Adaptive bbox thickness based on box size
+def get_bbox_thickness(box):
+    width = box[2] - box[0]
+    height = box[3] - box[1]
+    size = max(width, height)
+    if size < 50:
+        return 1
+    elif size < 150:
+        return 2
+    elif size < 300:
+        return 3
+    else:
+        return 4
 
-# ✅ Modified draw function with class-specific colors
+# ✅ Draw function with adaptive thickness and specific colors
 def draw(images, labels, boxes, scores, class_colors, thrh=0.6, path=""):
     for i, im in enumerate(images):
         draw = ImageDraw.Draw(im)
@@ -31,8 +45,10 @@ def draw(images, labels, boxes, scores, class_colors, thrh=0.6, path=""):
 
         for j, b in enumerate(box):
             cls_id = int(lab[j].item())
-            color = class_colors[cls_id % len(class_colors)]
-            draw.rectangle(list(b), outline=color, width=3)
+            color = class_colors.get(cls_id, (255, 255, 255))  # fallback white
+            thickness = get_bbox_thickness(b)
+            for t in range(thickness):
+                draw.rectangle([b[0]-t, b[1]-t, b[2]+t, b[3]+t], outline=color)
             draw.text((b[0], b[1]), text=f"ID:{cls_id} {round(scrs[j].item(),2)}",
                       font=ImageFont.load_default(), fill=color)
 
@@ -41,7 +57,7 @@ def draw(images, labels, boxes, scores, class_colors, thrh=0.6, path=""):
         else:
             im.save(f'results_{i}.jpg')
 
-
+# ✅ Inference for image files
 def run_on_image(image_path, model, transforms, device, out_dir, class_colors):
     im_pil = Image.open(image_path).convert('RGB')
     w, h = im_pil.size
@@ -55,7 +71,7 @@ def run_on_image(image_path, model, transforms, device, out_dir, class_colors):
     draw([im_pil], labels, boxes, scores, class_colors, 0.6, path=out_path)
     print(f"✅ Saved {out_path}")
 
-
+# ✅ Inference for video files
 def run_on_video(video_path, model, transforms, device, out_dir, class_colors):
     cap = cv2.VideoCapture(video_path)
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
@@ -84,7 +100,7 @@ def run_on_video(video_path, model, transforms, device, out_dir, class_colors):
     out.release()
     print(f"✅ Saved {out_path}")
 
-
+# ✅ Main function handling folder input
 def main(args):
     cfg = YAMLConfig(args.config, resume=args.resume)
     checkpoint = torch.load(args.resume, map_location='cpu')
@@ -110,9 +126,9 @@ def main(args):
     ])
 
     os.makedirs(args.out_dir, exist_ok=True)
-    class_colors = get_color_map(num_classes=91)  # COCO has 91 classes
+    class_colors = get_color_map()
 
-    # ✅ Handle folder input
+    # ✅ Process all files in folder
     if args.folder:
         files = os.listdir(args.folder)
         for f in files:
@@ -124,7 +140,7 @@ def main(args):
     else:
         print("⚠️ Please provide a folder with --folder")
 
-
+# ✅ Argument parsing and script entry point
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
