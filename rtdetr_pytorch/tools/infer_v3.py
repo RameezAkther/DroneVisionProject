@@ -52,7 +52,7 @@ def nms_iou_filter(boxes, scores, labels, iou_thresh=0.7):
     return boxes[keep_indices], scores[keep_indices], labels[keep_indices]
 
 def post_filter_predictions(labels, boxes, scores, max_swimmers=4,
-                            thr_swimmer=0.9, thr_boat=0.6, use_extra_nms=False):
+                            thr_swimmer=0.7, thr_boat=0.7, use_extra_nms=False):
     """
     Make predictions intentionally worse:
     - Strongly suppress swimmers (class 0) and swimmers-with-life-jacket (class 1)
