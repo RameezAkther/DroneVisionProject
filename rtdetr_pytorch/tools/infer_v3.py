@@ -51,8 +51,8 @@ def nms_iou_filter(boxes, scores, labels, iou_thresh=0.7):
     keep_indices = torch.cat(keep_indices, dim=0)
     return boxes[keep_indices], scores[keep_indices], labels[keep_indices]
 
-def post_filter_predictions(labels, boxes, scores, max_swimmers=4,
-                            thr_swimmer=0.7, thr_boat=0.7, use_extra_nms=False):
+def post_filter_predictions(labels, boxes, scores, max_swimmers=5,
+                            thr_swimmer=0.4, thr_boat=0.5, use_extra_nms=False):
     """
     Make predictions intentionally worse:
     - Strongly suppress swimmers (class 0) and swimmers-with-life-jacket (class 1)
