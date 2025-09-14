@@ -101,6 +101,57 @@ def force_bad_swimmer_outputs(labels, boxes, scores, max_swimmers=5):
 
     return new_labels, new_boxes, new_scores
 
+def randomize_swimmer_labels_and_cap(labels, boxes, scores, max_swimmers=5, p_flip=0.5, seed=None):
+    """
+    - Randomly relabel a fraction (p_flip) of class-1 (life jacket) to class-0 (swimmer).
+    - Keep at most `max_swimmers` among classes {0,1} by highest score.
+    - Leave class 2 (boat) untouched.
+    - Works on batch: labels[i], boxes[i], scores[i].
+    """
+    if seed is not None:
+        torch.manual_seed(seed)
+
+    out_labels, out_boxes, out_scores = [], [], []
+    for i in range(len(labels)):
+        lab = labels[i].clone()
+        box = boxes[i].clone()
+        scr = scores[i].clone()
+
+        # Randomly flip some class-1 to class-0
+        is_life = (lab == 1)
+        if is_life.any():
+            # sample per-detection uniform in [0,1)
+            randv = torch.rand(is_life.sum(), device=lab.device)
+            flip_mask = torch.zeros_like(lab, dtype=torch.bool)
+            flip_mask[is_life] = randv < p_flip
+            lab[flip_mask] = 0  # flip selected life-jackets to swimmers
+
+        # Build masks after random flips
+        is_swimmer_any = (lab == 0) | (lab == 1)  # both count toward swimmer cap
+        is_boat = (lab == 2)
+
+        # Cap swimmers: take top-K by score
+        swim_idx = torch.nonzero(is_swimmer_any, as_tuple=False).view(-1)
+        if swim_idx.numel() > 0:
+            swim_scores = scr[swim_idx]
+            # top-k selection
+            k = min(max_swimmers, swim_idx.numel())
+            topk_vals, topk_idx = torch.topk(swim_scores, k=k, largest=True, sorted=True)
+            keep_swim_idx = swim_idx[topk_idx]
+        else:
+            keep_swim_idx = swim_idx  # empty
+
+        # Keep all boats
+        boat_idx = torch.nonzero(is_boat, as_tuple=False).view(-1)
+
+        keep_idx = torch.cat([keep_swim_idx, boat_idx], dim=0)
+
+        out_labels.append(lab[keep_idx])
+        out_boxes.append(box[keep_idx])
+        out_scores.append(scr[keep_idx])
+
+    return out_labels, out_boxes, out_scores
+
 
 # ✅ Inference for image files
 def run_on_image(image_path, model, transforms, device, out_dir, class_colors):
@@ -111,7 +162,12 @@ def run_on_image(image_path, model, transforms, device, out_dir, class_colors):
 
     with torch.no_grad(), autocast():
         labels, boxes, scores = model(im_data, orig_size)
-        labels, boxes, scores = force_bad_swimmer_outputs(labels, boxes, scores, max_swimmers=5)
+        labels, boxes, scores = randomize_swimmer_labels_and_cap(
+        labels, boxes, scores,
+        max_swimmers=5,   # cap swimmers (classes 0 and 1 combined)
+        p_flip=0.5,       # 50% of class-1 relabeled to 0 at random
+        seed=None         # set an int (e.g., 42) for reproducible randomness
+        )
 
     out_path = os.path.join(out_dir, f"inferenced_{os.path.basename(image_path)}")
     draw([im_pil], labels, boxes, scores, class_colors, 0.6, path=out_path)
