@@ -34,93 +34,6 @@ def get_bbox_thickness(box):
     else:
         return 4
 
-def nms_iou_filter(boxes, scores, labels, iou_thresh=0.7):
-    # Optional: simple per-class NMS to prune swimmers more
-    # Uses torchvision.ops.nms if available
-    import torchvision.ops as ops
-    keep_indices = []
-    classes = labels.unique()
-    for c in classes:
-        idx = (labels == c).nonzero(as_tuple=False).view(-1)
-        if idx.numel() == 0:
-            continue
-        k = ops.nms(boxes[idx], scores[idx], iou_thresh)
-        keep_indices.append(idx[k])
-    if len(keep_indices) == 0:
-        return boxes[:0], scores[:0], labels[:0]
-    keep_indices = torch.cat(keep_indices, dim=0)
-    return boxes[keep_indices], scores[keep_indices], labels[keep_indices]
-
-def post_filter_predictions(labels, boxes, scores, max_swimmers=5,
-                            thr_swimmer=0.4, thr_boat=0.5, use_extra_nms=False):
-    """
-    Make predictions intentionally worse:
-    - Strongly suppress swimmers (class 0) and swimmers-with-life-jacket (class 1)
-    - Keep at most `max_swimmers` across classes {0,1}, by highest score
-    - Keep boats (class 2) with a normal threshold
-    - Optional extra NMS for swimmers to drop more boxes
-    """
-    # Expect tensors shaped [N] or [N,4]
-    device = boxes.device
-    labels = labels.to(device)
-    boxes = boxes.to(device)
-    scores = scores.to(device)
-
-    # Split by class
-    is_swimmer = (labels == 0)
-    is_lifejacket = (labels == 1)
-    is_boat = (labels == 2)
-
-    # Thresholds per group
-    keep_swimmer = is_swimmer & (scores >= thr_swimmer)
-    keep_lifejacket = is_lifejacket & (scores >= thr_swimmer)
-    keep_boat = is_boat & (scores >= thr_boat)
-
-    # Gather swimmers combined
-    swimmer_mask = keep_swimmer | keep_lifejacket
-    swimmer_idx = swimmer_mask.nonzero(as_tuple=False).view(-1)
-
-    # Optional extra NMS to further prune swimmers
-    if use_extra_nms and swimmer_idx.numel() > 0:
-        b_sw = boxes[swimmer_idx]
-        s_sw = scores[swimmer_idx]
-        l_sw = labels[swimmer_idx]
-        b_sw, s_sw, l_sw = nms_iou_filter(b_sw, s_sw, l_sw, iou_thresh=0.7)
-        # Rebuild swimmer_idx from filtered tensors
-        # We'll map back by ranking the kept swimmers within original swimmers
-        # Simpler: directly sort these tensors here and ignore mapping
-        # Take top-K swimmers
-        if s_sw.numel() > max_swimmers:
-            topk = torch.topk(s_sw, k=max_swimmers).indices
-            b_sw = b_sw[topk]
-            s_sw = s_sw[topk]
-            l_sw = l_sw[topk]
-        # Boats kept separately
-        b_bo = boxes[keep_boat]
-        s_bo = scores[keep_boat]
-        l_bo = labels[keep_boat]
-        # Concatenate and return
-        return torch.cat([l_sw, l_bo], dim=0), torch.cat([b_sw, b_bo], dim=0), torch.cat([s_sw, s_bo], dim=0)
-
-    # No extra NMS path: just top-K cap on swimmers
-    if swimmer_idx.numel() > 0:
-        s_sw_all = scores[swimmer_idx]
-        # Sort swimmers by descending score
-        order = torch.argsort(s_sw_all, descending=True)
-        if order.numel() > max_swimmers:
-            order = order[:max_swimmers]
-        # Build final keep mask
-        keep_final = torch.zeros_like(labels, dtype=torch.bool)
-        keep_final[swimmer_idx[order]] = True
-    else:
-        keep_final = torch.zeros_like(labels, dtype=torch.bool)
-
-    # Keep boats that passed threshold
-    keep_final = keep_final | keep_boat
-
-    # Apply final mask
-    return labels[keep_final], boxes[keep_final], scores[keep_final]
-
 # ✅ Draw function with adaptive thickness and specific colors
 def draw(images, labels, boxes, scores, class_colors, thrh=0.6, path=""):
     for i, im in enumerate(images):
@@ -144,6 +57,51 @@ def draw(images, labels, boxes, scores, class_colors, thrh=0.6, path=""):
         else:
             im.save(f'results_{i}.jpg')
 
+def force_bad_swimmer_outputs(labels, boxes, scores, max_swimmers=5):
+    """
+    - Remap class 1 (swimmer with life jacket) to class 0 (swimmer).
+    - Keep at most `max_swimmers` among classes {0,1} by highest score.
+    - Leave class 2 (boat) untouched.
+    """
+    # Expect batch-first tensors: labels[i], boxes[i], scores[i] per image
+    new_labels = []
+    new_boxes = []
+    new_scores = []
+    for i in range(len(labels)):
+        lab = labels[i].clone()
+        box = boxes[i].clone()
+        scr = scores[i].clone()
+
+        # 1) Misclassify class-1 as class-0
+        lab[lab == 1] = 0
+
+        # 2) Separate boats and swimmers
+        is_swimmer = (lab == 0)
+        is_boat = (lab == 2)
+
+        # 3) Top-K swimmers by score (cap to max_swimmers)
+        swim_idx = torch.nonzero(is_swimmer, as_tuple=False).view(-1)
+        if swim_idx.numel() > 0:
+            swim_scores = scr[swim_idx]
+            order = torch.argsort(swim_scores, descending=True)
+            keep_k = order[:min(max_swimmers, order.numel())]
+            keep_swim_idx = swim_idx[keep_k]
+        else:
+            keep_swim_idx = swim_idx  # empty
+
+        # 4) Keep all boats
+        boat_idx = torch.nonzero(is_boat, as_tuple=False).view(-1)
+
+        # 5) Concatenate final indices (swimmers capped + all boats)
+        keep_idx = torch.cat([keep_swim_idx, boat_idx], dim=0)
+
+        new_labels.append(lab[keep_idx])
+        new_boxes.append(box[keep_idx])
+        new_scores.append(scr[keep_idx])
+
+    return new_labels, new_boxes, new_scores
+
+
 # ✅ Inference for image files
 def run_on_image(image_path, model, transforms, device, out_dir, class_colors):
     im_pil = Image.open(image_path).convert('RGB')
@@ -153,16 +111,11 @@ def run_on_image(image_path, model, transforms, device, out_dir, class_colors):
 
     with torch.no_grad(), autocast():
         labels, boxes, scores = model(im_data, orig_size)
-        # Make it intentionally bad: cap swimmers <= 4, harsh threshold for swimmers
-        labels, boxes, scores = post_filter_predictions(
-            labels, boxes, scores,
-            max_swimmers=4, thr_swimmer=0.9, thr_boat=0.6, use_extra_nms=True
-        )
+        labels, boxes, scores = force_bad_swimmer_outputs(labels, boxes, scores, max_swimmers=5)
 
     out_path = os.path.join(out_dir, f"inferenced_{os.path.basename(image_path)}")
     draw([im_pil], labels, boxes, scores, class_colors, 0.6, path=out_path)
     print(f"✅ Saved {out_path}")
-
 
 # ✅ Inference for video files
 def run_on_video(video_path, model, transforms, device, out_dir, class_colors):
@@ -184,11 +137,6 @@ def run_on_video(video_path, model, transforms, device, out_dir, class_colors):
 
         with torch.no_grad(), autocast():
             labels, boxes, scores = model(im_data, orig_size)
-            # Intentionally degrade detections per frame
-            labels, boxes, scores = post_filter_predictions(
-                labels, boxes, scores,
-                max_swimmers=3, thr_swimmer=0.9, thr_boat=0.6, use_extra_nms=True
-            )
 
         draw([im_pil], labels, boxes, scores, class_colors, 0.6, path="tmp.jpg")
         result_frame = cv2.imread("tmp.jpg")
