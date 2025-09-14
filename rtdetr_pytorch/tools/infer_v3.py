@@ -165,7 +165,7 @@ def run_on_image(image_path, model, transforms, device, out_dir, class_colors):
         labels, boxes, scores = randomize_swimmer_labels_and_cap(
         labels, boxes, scores,
         max_swimmers=5,   # cap swimmers (classes 0 and 1 combined)
-        p_flip=0.7,       # 70% of class-1 relabeled to 0 at random
+        p_flip=0.35,       # 35% of class-1 relabeled to 0 at random
         seed=42         # set an int (e.g., 42) for reproducible randomness
         )
 
